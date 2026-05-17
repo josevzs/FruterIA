@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CARON — inventario urbano</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+/* ════════════════════════════════ TOKENS ════════════════════════════════ */
+:root {
+  --red:     #cc0000;
+  --red-dk:  #990000;
+  --black:   #0a0a0a;
+  --white:   #ffffff;
+  --g05:     #f5f5f5;
+  --g10:     #eeeeee;
+  --g20:     #dddddd;
+  --g40:     #aaaaaa;
+  --g60:     #666666;
+  --g80:     #333333;
+  --panel:   272px;
+  --font-bb: 'Bebas Neue', Impact, sans-serif;
+  --font-sg: 'Space Grotesk', 'Helvetica Neue', Arial, sans-serif;
+  --font-mo: 'Courier New', Courier, monospace;
+}
+
+/* ════════════════════════════════ RESET ══════════════════════════════════ */
+*,*::before,*::after { box-sizing:border-box; margin:0; padding:0; }
+html,body { height:100%; }
+body {
+  font-family: var(--font-sg);
+  font-size: 12px;
+  background: var(--g05);
+  color: var(--black);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+input,select,button,textarea { font-family: inherit; }
+button { cursor: pointer; }
+
+/* ════════════════════════════════ HEADER ═════════════════════════════════ */
+header {
+  height: 48px;
+  background: var(--white);
+  border-bottom: 2px solid var(--black);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  flex-shrink: 0;
+}
+.logo {
+  font-family: var(--font-bb);
+  font-size: 28px;
+  letter-spacing: 0.08em;
+  color: var(--red);
+  line-height: 1;
+}
+.logo-sub {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  color: var(--g40);
+  text-transform: uppercase;
+}
+
+/* ════════════════════════════════ WORKSPACE ══════════════════════════════ */
+.workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ════════════════════════════════ SIDEBAR ════════════════════════════════ */
+aside {
+  width: var(--panel);
+  min-width: var(--panel);
+  background: var(--white);
+  border-right: 2px solid var(--black);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--g20) transparent;
+}
+
+/* Section blocks */
+.blk {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--g20);
+}
+.blk-title {
+  font-family: var(--font-bb);
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: var(--black);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.blk-title::before {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 14px;
+  background: var(--red);
+  flex-shrink: 0;
+}
+
+/* Form */
+label.lbl {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--g60);
+  margin-bottom: 4px;
+}
+input[type="text"],
+input[type="number"],
+select {
+  width: 100%;
+  border: 1px solid var(--g20);
+  border-bottom: 2px solid var(--black);
+  background: var(--g05);
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--black);
+  outline: none;
+  -webkit-appearance: none;
+  border-radius: 0;
+  margin-bottom: 8px;
+  transition: border-color 0.1s, background 0.1s;
+}
+input:focus, select:focus {
+  border-bottom-color: var(--red);
+  background: var(--white);
+}
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--red);
+  height: 2px;
+  margin-bottom: 6px;
+}
+input[type="color"] {
+  width: 28px; height: 22px;
+  border: 1px solid var(--g20);
+  border-bottom: 2px solid var(--black);
+  padding: 1px 2px;
+  background: none;
+  cursor: pointer;
+  border-radius: 0;
+}
+input[type="checkbox"] {
+  accent-color: var(--red);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.chk-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--g80);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+/* Grid 2 cols */
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+
+/* Range row */
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.range-row input { margin-bottom: 0; flex: 1; }
+.range-val {
+  font-family: var(--font-mo);
+  font-size: 10px;
+  color: var(--g40);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* Color row */
+.color-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+.color-lbl {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--g60);
+}
+
+/* Radio pills */
+.radio-set {
+  display: flex;
+  border: 1px solid var(--g20);
+  border-bottom: 2px solid var(--black);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.radio-set input { display: none; }
+.radio-set label {
+  flex: 1;
+  text-align: center;
+  padding: 6px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--g60);
+  background: var(--g05);
+  cursor: pointer;
+  border-right: 1px solid var(--g20);
+  transition: all 0.1s;
+}
+.radio-set label:last-child { border-right: none; }
+.radio-set input:checked + label {
+  background: var(--black);
+  color: var(--white);
+  border-color: var(--black);
+}
+
+/* ════════════════════════════════ BUTTONS ═════════════════════════════════ */
+.btn {
+  display: block;
+  width: 100%;
+  border: none;
+  padding: 10px 16px;
+  font-family: var(--font-bb);
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all 0.12s;
+  border-radius: 0;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.btn-generate {
+  background: var(--red);
+  color: var(--white);
+  border-bottom: 3px solid var(--red-dk);
+}
+.btn-generate:hover:not(:disabled) {
+  background: var(--red-dk);
+  border-bottom-color: var(--black);
+}
+.btn-generate:disabled {
+  background: var(--g40);
+  border-bottom-color: var(--g60);
+  cursor: not-allowed;
+}
+.btn-exp {
+  background: var(--white);
+  color: var(--black);
+  border: 1px solid var(--g20);
+  border-bottom: 2px solid var(--black);
+  font-size: 13px;
+  padding: 8px 10px;
+  margin-bottom: 0;
+}
+.btn-exp:hover:not(:disabled) {
+  background: var(--black);
+  color: var(--white);
+  border-color: var(--black);
+}
+.btn-exp:disabled {
+  color: var(--g40);
+  border-color: var(--g20);
+  border-bottom-color: var(--g40);
+  cursor: not-allowed;
+}
+
+/* ════════════════════════════════ SEARCH DROPDOWN ════════════════════════ */
+.search-wrap { position: relative; }
+.dropdown {
+  position: absolute;
+  top: 100%; left: 0; right: 0;
+  background: var(--white);
+  border: 1px solid var(--black);
+  border-top: none;
+  z-index: 200;
+  max-height: 220px;
+  overflow-y: auto;
+  box-shadow: 3px 3px 0 var(--black);
+}
+.d-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--g10);
+  transition: background 0.08s;
+}
+.d-item:hover { background: var(--g05); }
+.d-item-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--black);
+  display: block;
+}
+.d-item-sub {
+  font-size: 10px;
+  color: var(--g40);
+  letter-spacing: 0.04em;
+}
+
+/* ════════════════════════════════ PREVIEW ════════════════════════════════ */
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.preview-bar {
+  height: 36px;
+  background: var(--white);
+  border-bottom: 1px solid var(--g20);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  flex-shrink: 0;
+}
+.preview-info {
+  font-family: var(--font-mo);
+  font-size: 10px;
+  color: var(--g60);
+}
+.preview-info .hi { color: var(--red); font-weight: 700; }
+.zoom-row { display: flex; gap: 3px; }
+.zbtn {
+  width: 26px; height: 26px;
+  background: var(--white);
+  border: 1px solid var(--g20);
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--g60);
+  transition: all 0.1s;
+  border-radius: 0;
+}
+.zbtn:hover { border-color: var(--black); color: var(--black); background: var(--g05); }
+
+/* ── Tab switcher ── */
+.tabs {
+  display: flex;
+  border-bottom: 2px solid var(--black);
+  background: var(--white);
+  flex-shrink: 0;
+}
+.tab {
+  padding: 0 20px;
+  height: 36px;
+  display: flex; align-items: center;
+  font-family: var(--font-bb);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  color: var(--g40);
+  cursor: pointer;
+  border-right: 1px solid var(--g20);
+  transition: all 0.1s;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  user-select: none;
+}
+.tab:hover { color: var(--black); }
+.tab.active { color: var(--red); border-bottom-color: var(--red); }
+
+/* ── Canvas views ── */
+.view { display: none; flex: 1; position: relative; overflow: hidden; }
+.view.active { display: flex; flex-direction: column; }
+
+/* Leaflet tooltip */
+.map-tooltip {
+  font-family: var(--font-mo);
+  font-size: 10px;
+  background: var(--black);
+  color: var(--white);
+  border: none;
+  border-radius: 0;
+  padding: 3px 7px;
+  box-shadow: none;
+}
+.map-tooltip::before { display:none; }
+
+#canvas {
+  flex: 1;
+  overflow: auto;
+  background: var(--g10);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 28px;
+  position: relative;
+}
+
+/* Empty / loading / error states */
+.state-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.state-big {
+  font-family: var(--font-bb);
+  font-size: clamp(40px, 6vw, 80px);
+  letter-spacing: 0.06em;
+  color: var(--g20);
+  line-height: 1;
+  text-align: center;
+}
+.state-sub {
+  font-size: 11px;
+  color: var(--g40);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-top: 10px;
+}
+/* loading */
+.state-overlay.loading .state-big { color: var(--black); animation: flicker 1.2s ease-in-out infinite alternate; }
+.state-overlay.loading .state-sub { color: var(--red); }
+@keyframes flicker { from{opacity:0.6} to{opacity:1} }
+/* error */
+.state-overlay.error .state-big { color: var(--red); font-size: clamp(24px, 3vw, 44px); }
+.state-overlay.error .state-sub { color: var(--g60); }
+
+#svg-wrap {
+  background: var(--white);
+  border: 1px solid var(--g20);
+  box-shadow: 4px 4px 0 var(--black);
+  display: none;
+  transform-origin: top left;
+}
+#svg-wrap svg { display: block; }
+
+/* ════════════════════════════════ STATUS BAR ═════════════════════════════ */
+.sbar {
+  height: 32px;
+  background: var(--black);
+  border-top: 2px solid var(--black);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 20px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.sbar-stat {
+  font-family: var(--font-mo);
+  font-size: 10px;
+  color: var(--g40);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.sbar-stat .v { color: var(--white); }
+.sbar-stat .r { color: var(--red); }
+.sbar-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--g60);
+  flex-shrink: 0;
+}
+.sbar-dot.on  { background: #22c55e; }
+.sbar-dot.run { background: var(--red); animation: pulse 0.8s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+/* ════════════════════════════════ TOOLTIP ═══════════════════════════════ */
+#tip {
+  position: fixed;
+  background: var(--black);
+  color: var(--white);
+  padding: 3px 8px;
+  font-family: var(--font-mo);
+  font-size: 10px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.08s;
+  z-index: 999;
+  white-space: nowrap;
+}
+
+/* ════════════════════════════════ SCROLLBAR ══════════════════════════════ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--g20); }
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ══════════════════════════════════════════════════════════ -->
+<header>
+  <div>
+    <div class="logo">CARON</div>
+  </div>
+  <div class="logo-sub">inventario urbano español &nbsp;·&nbsp; d'après Armelle Caron</div>
+</header>
+
+<div class="workspace">
+
+<!-- ═══ SIDEBAR ═════════════════════════════════════════════════════════ -->
+<aside>
+
+  <!-- MUNICIPIO -->
+  <div class="blk">
+    <div class="blk-title">Municipio</div>
+    <label class="lbl">Buscar por nombre</label>
+    <div class="search-wrap">
+      <input type="text" id="search" placeholder="Moraleja de Enmedio" autocomplete="off">
+      <div class="dropdown" id="dd" style="display:none"></div>
+    </div>
+    <input type="hidden" id="osm-type">
+    <input type="hidden" id="osm-id">
+    <div id="muni-info" style="font-size:10px;color:var(--g40);min-height:12px;font-weight:500"></div>
+  </div>
+
+  <!-- ELEMENTO -->
+  <div class="blk">
+    <div class="blk-title">Elemento</div>
+    <div class="radio-set">
+      <input type="radio" name="el" id="el-ed" value="edificios" checked><label for="el-ed">Edificios</label>
+      <input type="radio" name="el" id="el-mz" value="manzanas"><label for="el-mz">Manzanas</label>
+      <input type="radio" name="el" id="el-pc" value="parcelas"><label for="el-pc">Parcelas</label>
+    </div>
+    <label class="lbl">Fuente de datos</label>
+    <div class="radio-set">
+      <input type="radio" name="fuente" id="ft-cat" value="catastro" checked><label for="ft-cat">Catastro</label>
+      <input type="radio" name="fuente" id="ft-auto" value="auto"><label for="ft-auto">Auto</label>
+      <input type="radio" name="fuente" id="ft-osm" value="osm"><label for="ft-osm">OSM</label>
+    </div>
+    <div style="font-size:9px;color:var(--g40);line-height:1.4;margin-top:4px">
+      <b style="color:var(--red)">Catastro</b>: más completo (INSPIRE bulk) — <b>Auto</b>: Catastro + fallback OSM — <b>OSM</b>: solo OpenStreetMap
+    </div>
+  </div>
+
+  <!-- LAYOUT -->
+  <div class="blk">
+    <div class="blk-title">Layout</div>
+    <label class="lbl">Ordenar por</label>
+    <select id="sort">
+      <option value="area">Área (mayor → menor)</option>
+      <option value="perimeter">Perímetro</option>
+      <option value="width">Anchura</option>
+      <option value="height">Altura</option>
+    </select>
+    <label class="lbl">Ancho panel (m)</label>
+    <input type="number" id="sw" value="400" min="10" step="10">
+    <div class="g2">
+      <div><label class="lbl">Sep. H</label><input type="number" id="csp" value="4" min="0" step="0.5"></div>
+      <div><label class="lbl">Sep. V</label><input type="number" id="rsp" value="8" min="0" step="0.5"></div>
+    </div>
+    <label class="chk-label"><input type="checkbox" id="rot" checked>Rotar para ajustar</label>
+  </div>
+
+  <!-- FILTROS -->
+  <div class="blk">
+    <div class="blk-title">Filtros</div>
+    <div class="g2">
+      <div><label class="lbl">Área mín m²</label><input type="number" id="amin" value="0" min="0"></div>
+      <div><label class="lbl">Área máx m²</label><input type="number" id="amax" value="0" min="0" title="0=sin límite"></div>
+    </div>
+    <div class="g2">
+      <div><label class="lbl">Simplificar m</label><input type="number" id="simp" value="0" min="0" step="0.1"></div>
+      <div><label class="lbl">Escala ×</label><input type="number" id="scale" value="1" min="0.001" step="0.1"></div>
+    </div>
+  </div>
+
+  <!-- VISUAL -->
+  <div class="blk">
+    <div class="blk-title">Visual</div>
+
+    <div class="color-row"><span class="color-lbl">Trazo</span><input type="color" id="c-stroke" value="#111111"></div>
+    <label class="lbl">Grosor trazo</label>
+    <div class="range-row">
+      <input type="range" id="sw-val" min="0.1" max="6" step="0.1" value="0.4">
+      <span class="range-val" id="sw-lbl">0.4</span>
+    </div>
+
+    <div class="color-row"><span class="color-lbl">Relleno</span><input type="color" id="c-fill" value="#e0e0e0"></div>
+    <label class="lbl">Opacidad relleno</label>
+    <div class="range-row">
+      <input type="range" id="op-val" min="0" max="1" step="0.05" value="0.55">
+      <span class="range-val" id="op-lbl">0.55</span>
+    </div>
+
+    <div class="color-row"><span class="color-lbl">Fondo</span><input type="color" id="c-bg" value="#ffffff"></div>
+
+    <label class="lbl">Padding (m)</label>
+    <input type="number" id="pad" value="12" min="0" step="2">
+
+    <label class="chk-label"><input type="checkbox" id="stats" checked>Mostrar estadísticas</label>
+  </div>
+
+  <!-- GENERAR -->
+  <div class="blk">
+    <button class="btn btn-generate" id="btn-gen">Generar</button>
+  </div>
+
+  <!-- EXPORTAR -->
+  <div class="blk">
+    <div class="blk-title">Exportar</div>
+    <div class="g3">
+      <button class="btn btn-exp" id="btn-svg" disabled>SVG</button>
+      <button class="btn btn-exp" id="btn-dxf" disabled>DXF</button>
+      <button class="btn btn-exp" id="btn-pdf" disabled>PDF</button>
+    </div>
+  </div>
+
+  <!-- PDF OPCIONES -->
+  <div class="blk">
+    <div class="blk-title">PDF / DXF</div>
+    <label class="lbl">Formato</label>
+    <select id="pfmt">
+      <option value="420x297">A3 apaisado</option>
+      <option value="297x210">A4 apaisado</option>
+      <option value="594x420">A2 apaisado</option>
+      <option value="841x594">A1 apaisado</option>
+    </select>
+    <label class="lbl">Margen mm</label>
+    <input type="number" id="pmrg" value="15" min="0" step="5">
+    <div class="color-row"><span class="color-lbl">Trazo PDF</span><input type="color" id="p-stroke" value="#111111"></div>
+    <div class="color-row"><span class="color-lbl">Relleno PDF</span><input type="color" id="p-fill" value="#e0e0e0"></div>
+    <label class="lbl">Opacidad PDF</label>
+    <div class="range-row">
+      <input type="range" id="pa-val" min="0" max="1" step="0.05" value="0.7">
+      <span class="range-val" id="pa-lbl">0.7</span>
+    </div>
+  </div>
+
+  <!-- MAPA OPCIONES -->
+  <div class="blk" id="map-export-blk">
+    <div class="blk-title">Exportar mapa</div>
+    <label class="lbl">Base cartográfica</label>
+    <select id="map-src">
+      <option value="CartoDB.Positron">CartoDB Positron (limpio)</option>
+      <option value="OpenStreetMap.Mapnik">OpenStreetMap</option>
+      <option value="CartoDB.DarkMatter">CartoDB Dark</option>
+    </select>
+    <div class="color-row"><span class="color-lbl">Relleno mapa</span><input type="color" id="m-fill" value="#cc0000"></div>
+    <label class="lbl">Opacidad elementos</label>
+    <div class="range-row">
+      <input type="range" id="m-alpha" min="0.1" max="1" step="0.05" value="0.45">
+      <span class="range-val" id="m-alpha-lbl">0.45</span>
+    </div>
+    <div class="color-row"><span class="color-lbl">Trazo mapa</span><input type="color" id="m-stroke" value="#111111"></div>
+    <label class="lbl">Resolución</label>
+    <select id="m-dpi">
+      <option value="96">Pantalla (96 dpi)</option>
+      <option value="150" selected>Media (150 dpi)</option>
+      <option value="300">Alta (300 dpi)</option>
+    </select>
+    <label class="chk-label"><input type="checkbox" id="m-boundary" checked>Término municipal</label>
+    <label class="chk-label"><input type="checkbox" id="m-scale" checked>Escala gráfica</label>
+    <div class="g2" style="margin-top:4px">
+      <button class="btn btn-exp" id="btn-map-osm" disabled>PNG+OSM</button>
+      <button class="btn btn-exp" id="btn-map-nofg" disabled>PNG plano</button>
+    </div>
+    <div class="g2" style="margin-top:6px">
+      <button class="btn btn-exp" id="btn-map-svg" disabled>SVG vectorial</button>
+      <button class="btn btn-exp" id="btn-map-dxf" disabled>DXF vectorial</button>
+    </div>
+  </div>
+
+</aside>
+
+<!-- ═══ PREVIEW ═════════════════════════════════════════════════════════ -->
+<main>
+  <!-- Tab switcher -->
+  <div class="tabs">
+    <div class="tab active" id="tab-inv" onclick="switchTab('inv')">INVENTARIO</div>
+    <div class="tab" id="tab-map" onclick="switchTab('map')">MAPA REAL</div>
+    <div style="flex:1"></div>
+    <!-- Info + zoom solo en inventario -->
+    <div style="display:flex;align-items:center;padding:0 12px;gap:8px" id="inv-toolbar">
+      <div class="preview-info" id="pinfo"><span class="hi">—</span></div>
+      <div class="zoom-row">
+        <button class="zbtn" id="zi">+</button>
+        <button class="zbtn" id="zo">−</button>
+        <button class="zbtn" id="zf" style="font-size:11px;width:auto;padding:0 7px">FIT</button>
+      </div>
+    </div>
+    <!-- Info + controles en mapa -->
+    <div style="display:none;align-items:center;gap:8px;padding:0 12px" id="map-toolbar">
+      <div class="preview-info" id="map-pinfo"><span class="hi">—</span></div>
+      <div class="zoom-row">
+        <button class="zbtn" id="map-fit" title="Ajustar a los elementos">⊡</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Vista INVENTARIO ── -->
+  <div class="view active" id="view-inv">
+    <div id="canvas">
+      <div class="state-overlay" id="st-empty">
+        <div class="state-big">SIN DATOS</div>
+        <div class="state-sub">Busca un municipio y pulsa Generar</div>
+      </div>
+      <div class="state-overlay loading" id="st-load" style="display:none">
+        <div class="state-big" id="st-load-name">CARGANDO</div>
+        <div class="state-sub" id="st-load-sub">descargando geometría…</div>
+      </div>
+      <div class="state-overlay error" id="st-err" style="display:none">
+        <div class="state-big">ERROR</div>
+        <div class="state-sub" id="st-err-msg">—</div>
+      </div>
+      <div id="svg-wrap"></div>
+    </div>
+  </div>
+
+  <!-- ── Vista MAPA ── -->
+  <div class="view" id="view-map">
+    <div id="leaflet-map" style="position:absolute;inset:0;background:#e8e8e8"></div>
+  </div>
+
+  <!-- STATUS BAR -->
+  <div class="sbar">
+    <div class="sbar-dot" id="sdot"></div>
+    <div class="sbar-stat" id="sbar-main"><span class="v">—</span></div>
+    <div class="sbar-stat" id="sbar-n" style="display:none">n=<span class="v" id="sv-n">—</span></div>
+    <div class="sbar-stat" id="sbar-st" style="display:none">S=<span class="v" id="sv-st">—</span> m²</div>
+    <div class="sbar-stat" id="sbar-sm" style="display:none">Ø=<span class="v" id="sv-sm">—</span> m²</div>
+    <div class="sbar-stat" id="sbar-ord" style="display:none">orden:<span class="r" id="sv-ord">—</span></div>
+  </div>
+</main>
+</div>
+
+<div id="tip"></div>
+
+<script>
+// ═══ STATE ═══════════════════════════════════════════════════════════════
+const S = {
+  jobId:    null,
+  muni:     '',
+  el:       'edificios',
+  data:     null,
+  zoom:     1.0,
+  timer:    null,
+};
+
+// ═══ DOM ══════════════════════════════════════════════════════════════════
+const $  = id => document.getElementById(id);
+const gv = id => $( id).value;
+const gf = id => parseFloat(gv(id));
+const gb = id => $(id).checked;
+
+// ═══ STATES ═══════════════════════════════════════════════════════════════
+function showState(which, sub='') {
+  ['empty','load','err'].forEach(s => $('st-'+s).style.display = s===which ? 'flex':'none');
+  $('svg-wrap').style.display = which === 'svg' ? 'block' : 'none';
+  if (which==='load' && S.muni) $('st-load-name').textContent = S.muni.toUpperCase();
+  if (which==='load' && sub)    $('st-load-sub').textContent  = sub;
+  if (which==='err'  && sub)    $('st-err-msg').textContent   = sub;
+}
+
+// ═══ STATUS BAR ══════════════════════════════════════════════════════════
+function sbarStatus(msg, dot='') {
+  $('sbar-main').innerHTML = `<span class="v">${msg}</span>`;
+  $('sdot').className = 'sbar-dot' + (dot==='on'?' on':dot==='run'?' run':'');
+}
+function sbarData(d) {
+  ['n','st','sm','ord'].forEach(id => $('sbar-'+id).style.display='inline');
+  $('sv-n').textContent   = d.n.toLocaleString('es');
+  $('sv-st').textContent  = d.total_area.toLocaleString('es',{maximumFractionDigits:0});
+  $('sv-sm').textContent  = d.mean_area.toLocaleString('es',{maximumFractionDigits:1});
+  $('sv-ord').textContent = d.params.sort_mode;
+}
+function sbarClear() {
+  ['n','st','sm','ord'].forEach(id => $('sbar-'+id).style.display='none');
+}
+
+// ═══ SEARCH ═══════════════════════════════════════════════════════════════
+let _st = null;
+$('search').addEventListener('input', () => {
+  clearTimeout(_st);
+  const q = $('search').value.trim();
+  if (q.length < 2) { $('dd').style.display='none'; return; }
+  _st = setTimeout(() => doSearch(q), 380);
+});
+document.addEventListener('click', e => { if (!e.target.closest('.search-wrap')) $('dd').style.display='none'; });
+
+async function doSearch(q) {
+  try {
+    const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const items = await r.json();
+    renderDD(items);
+  } catch(e) { sbarStatus('Error búsqueda: '+e.message, ''); }
+}
+
+function renderDD(items) {
+  const dd = $('dd');
+  if (!items.length) { dd.style.display='none'; return; }
+  dd.innerHTML = items.slice(0,8).map(it => `
+    <div class="d-item" data-type="${it.osm_type}" data-id="${it.osm_id}" data-name="${it.municipio}">
+      <span class="d-item-name">${it.municipio || it.display_name.split(',')[0]}</span>
+      <span class="d-item-sub">${[it.provincia,it.comunidad].filter(Boolean).join(' · ') || it.display_name.split(',').slice(1,3).join(',')}</span>
+    </div>`).join('');
+  dd.style.display='block';
+  dd.querySelectorAll('.d-item').forEach(el => {
+    el.addEventListener('click', () => {
+      $('osm-type').value = el.dataset.type;
+      $('osm-id').value   = el.dataset.id;
+      S.muni = el.querySelector('.d-item-name').textContent;
+      $('search').value   = S.muni;
+      $('muni-info').textContent = el.querySelector('.d-item-sub').textContent;
+      dd.style.display='none';
+    });
+  });
+}
+
+// ═══ GENERATE ═════════════════════════════════════════════════════════════
+$('btn-gen').addEventListener('click', async () => {
+  const osmType = gv('osm-type'), osmId = parseInt(gv('osm-id'));
+  if (!osmType || !osmId) { alert('Selecciona un municipio de la lista.'); return; }
+
+  $('btn-gen').disabled = true;
+  ['svg','dxf','pdf'].forEach(x => $('btn-'+x).disabled = true);
+  S.data = null; S.jobId = null;
+  S.el = document.querySelector('input[name="el"]:checked').value;
+
+  sbarClear();
+  sbarStatus('enviando…','run');
+  showState('load','conectando con OpenStreetMap…');
+
+  const body = {
+    osm_type: osmType, osm_id: osmId, elemento: S.el,
+    fuente: document.querySelector('input[name="fuente"]:checked').value,
+    sort_mode: gv('sort'),
+    sheet_width: gf('sw'), col_spacing: gf('csp'), row_spacing: gf('rsp'),
+    scale_factor: gf('scale'), rotate_to_fit: gb('rot'),
+    min_area: gf('amin'), max_area: gf('amax'),
+    simplify_tolerance: gf('simp'),
+  };
+
+  try {
+    const r = await fetch('/api/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    S.jobId = d.job_id;
+    poll();
+  } catch(e) {
+    showState('err', e.message);
+    sbarStatus('Error: '+e.message,'');
+    $('btn-gen').disabled=false;
+  }
+});
+
+// ═══ POLL ═════════════════════════════════════════════════════════════════
+const STATUS_LABELS = {
+  queued:                    ['en cola…',                  'iniciando'],
+  downloading:               ['descargando límite…',      'OpenStreetMap Overpass'],
+  downloading_edificios:     ['descargando edificios…',   'OpenStreetMap / Catastro'],
+  downloading_manzanas:      ['descargando red viaria…',  'poligonizando manzanas'],
+  downloading_parcelas:      ['descargando parcelas…',    'Catastro WFS INSPIRE'],
+  processing:                ['calculando inventario…',   'algoritmo Caron'],
+};
+
+function poll() {
+  clearTimeout(S.timer);
+  S.timer = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/status/${S.jobId}`);
+      const d = await r.json();
+
+      if (d.status === 'done') {
+        S.data = d;
+        if (d.n === 0) {
+          showState('err', `0 ${S.el} encontrados en este municipio`);
+          sbarStatus(`0 ${S.el} encontrados`,'');
+        } else {
+          renderSVG();
+          const fuenteLbl = d.fuente_real === 'catastro' ? '· Catastro INSPIRE' : d.fuente_real === 'osm' ? '· OSM' : '';
+          sbarStatus(`${S.muni.toUpperCase()} — ${d.n} ${S.el} ${fuenteLbl}`, 'on');
+          sbarData(d);
+          updatePInfo();
+          ['svg','dxf','pdf'].forEach(x => $('btn-'+x).disabled=false);
+          ['map-osm','map-nofg','map-svg','map-dxf'].forEach(x => $('btn-'+x).disabled=false);
+          // Si ya estamos en el mapa, recargar la capa
+          if (_activeTab==='map' && _leaflet) _loadGeoLayer();
+        }
+        $('btn-gen').disabled=false;
+
+      } else if (d.status === 'error') {
+        showState('err', d.error || 'error desconocido');
+        sbarStatus('ERROR: '+(d.error||'desconocido'),'');
+        $('btn-gen').disabled=false;
+
+      } else {
+        const [main,sub] = STATUS_LABELS[d.status] || [d.status,''];
+        sbarStatus(main,'run');
+        showState('load', sub);
+        poll();
+      }
+    } catch(e) {
+      showState('err', e.message);
+      sbarStatus('Error de red','');
+      $('btn-gen').disabled=false;
+    }
+  }, 2000);
+}
+
+// ═══ SVG RENDER ════════════════════════════════════════════════════════════
+function getStyle() {
+  return {
+    stroke:   gv('c-stroke'),
+    sw:       gf('sw-val'),
+    fill:     gv('c-fill'),
+    op:       gf('op-val'),
+    bg:       gv('c-bg'),
+    stats:    gb('stats'),
+    pad:      gf('pad')||12,
+  };
+}
+
+function renderSVG() {
+  if (!S.data?.polygons?.length) return;
+  const d = S.data, st = getStyle();
+
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for (const p of d.polygons)
+    for (const [x,y] of p.exterior) {
+      if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+    }
+  if (!isFinite(x0)) return;
+
+  const vw = x1-x0+st.pad*2, vh = y1-y0+st.pad*2;
+  const ox = x0-st.pad, oy = y0-st.pad;
+  const tx = x => (x-ox).toFixed(2);
+  const ty = y => (vh-(y-oy)).toFixed(2);
+
+  function ringD(r) {
+    if(!r.length) return '';
+    let s=`M${tx(r[0][0])} ${ty(r[0][1])}`;
+    for(let i=1;i<r.length;i++) s+=` L${tx(r[i][0])} ${ty(r[i][1])}`;
+    return s+' Z';
+  }
+
+  const paths = d.polygons.map(p=>{
+    let dd = ringD(p.exterior);
+    for(const h of (p.holes||[])) dd+=' '+ringD(h);
+    const fr = p.holes?.length ? 'evenodd':'nonzero';
+    return `<path d="${dd}" fill="${st.fill}" fill-opacity="${st.op}" stroke="${st.stroke}" stroke-width="${st.sw}" fill-rule="${fr}" data-rank="${p.rank}" data-area="${p.area}" class="pc"/>`;
+  }).join('');
+
+  let annotations = '';
+  if (st.stats && S.muni) {
+    const fs = Math.max(3, vw*0.014);
+    const ty_s = vh - st.pad*0.2;
+    annotations = `
+      <text x="${st.pad}" y="${ty_s.toFixed(2)}" font-family="Bebas Neue,Impact,sans-serif" font-size="${(fs*1.4).toFixed(2)}" fill="#cc0000" letter-spacing="0.08em">${S.muni.toUpperCase()}</text>
+      <text x="${st.pad}" y="${(ty_s+fs*1.6).toFixed(2)}" font-family="Courier New,monospace" font-size="${(fs*0.8).toFixed(2)}" fill="${st.stroke}">n=${d.n} · S=${d.total_area.toLocaleString('es',{maximumFractionDigits:0})} m² · ø=${d.mean_area.toLocaleString('es',{maximumFractionDigits:0})} m² · ${d.params.sort_mode}</text>
+      <text x="${st.pad}" y="${(ty_s+fs*2.7).toFixed(2)}" font-family="Space Grotesk,sans-serif" font-size="${(fs*0.65).toFixed(2)}" fill="#999" font-style="italic">d'après Armelle Caron — les villes rangées</text>`;
+  }
+
+  const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vw.toFixed(2)} ${vh.toFixed(2)}" width="${Math.round(vw)}" height="${Math.round(vh)}">
+<rect width="${vw.toFixed(2)}" height="${vh.toFixed(2)}" fill="${st.bg}"/>
+<g id="inv">${paths}</g>
+${annotations}
+</svg>`;
+
+  $('svg-wrap').innerHTML = svgStr;
+  showState('svg');
+  applyZoom();
+  attachTips();
+}
+
+// Live visual update (no API call)
+['c-stroke','sw-val','c-fill','op-val','c-bg','stats','pad'].forEach(id=>{
+  $(id)?.addEventListener('input',()=>{ renderSVG(); });
+});
+$('sw-val').addEventListener('input',()=>{ $('sw-lbl').textContent=gf('sw-val').toFixed(1); });
+$('op-val').addEventListener('input',()=>{ $('op-lbl').textContent=gf('op-val').toFixed(2); });
+$('pa-val').addEventListener('input',()=>{ $('pa-lbl').textContent=gf('pa-val').toFixed(2); });
+
+// ═══ PREVIEW INFO ══════════════════════════════════════════════════════════
+function updatePInfo() {
+  if (!S.data) return;
+  $('pinfo').innerHTML = `<span class="hi">${S.muni.toUpperCase()}</span> &nbsp;·&nbsp; ${S.data.n.toLocaleString('es')} ${S.el} &nbsp;·&nbsp; ${S.data.total_area.toLocaleString('es',{maximumFractionDigits:0})} m²`;
+}
+
+// ═══ ZOOM ═════════════════════════════════════════════════════════════════
+function applyZoom() { $('svg-wrap').style.transform=`scale(${S.zoom})`; }
+$('zi').addEventListener('click',()=>{ S.zoom=Math.min(S.zoom*1.3,10); applyZoom(); });
+$('zo').addEventListener('click',()=>{ S.zoom=Math.max(S.zoom/1.3,0.04); applyZoom(); });
+$('zf').addEventListener('click',()=>{ S.zoom=1; applyZoom(); });
+
+// ═══ TOOLTIPS ═════════════════════════════════════════════════════════════
+const tip = $('tip');
+function attachTips() {
+  $('svg-wrap').querySelectorAll('.pc').forEach(el=>{
+    el.addEventListener('mouseenter',()=>{
+      tip.textContent=`#${el.dataset.rank} · ${parseFloat(el.dataset.area).toLocaleString('es',{maximumFractionDigits:1})} m²`;
+      tip.style.opacity='1';
+    });
+    el.addEventListener('mousemove',e=>{
+      tip.style.left=(e.clientX+14)+'px';
+      tip.style.top=(e.clientY+10)+'px';
+    });
+    el.addEventListener('mouseleave',()=>{ tip.style.opacity='0'; });
+  });
+}
+
+// ═══ EXPORTS ═══════════════════════════════════════════════════════════════
+function hexRgb(h) {
+  return [parseInt(h.slice(1,3),16)/255, parseInt(h.slice(3,5),16)/255, parseInt(h.slice(5,7),16)/255];
+}
+function buildExportBody() {
+  const [pr,pg,pb]=hexRgb(gv('p-stroke')), [fr,fg,fb]=hexRgb(gv('p-fill'));
+  const [pw,ph]=gv('pfmt').split('x').map(Number);
+  return {
+    job_id: S.jobId, municipio: S.muni,
+    stroke: gv('c-stroke'), stroke_width: gf('sw-val'),
+    fill: gv('c-fill'), fill_opacity: gf('op-val'),
+    background: gv('c-bg'), show_stats: gb('stats'), padding: gf('pad')||12,
+    page_width_mm: pw, page_height_mm: ph, margin_mm: gf('pmrg'),
+    stroke_color_r:pr, stroke_color_g:pg, stroke_color_b:pb,
+    fill_color_r:fr,   fill_color_g:fg,   fill_color_b:fb,
+    fill_alpha: gf('pa-val'),
+    accent_r:0.8, accent_g:0, accent_b:0,
+  };
+}
+
+async function doExport(ep, ext) {
+  if (!S.jobId) return;
+  sbarStatus(`generando ${ext.toUpperCase()}…`,'run');
+  try {
+    const r = await fetch('/api/export/'+ep,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(buildExportBody()),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url; a.download=`caron_${S.muni}_${S.el}.${ext}`; a.click();
+    URL.revokeObjectURL(url);
+    sbarStatus(`${ext.toUpperCase()} exportado`,'on');
+  } catch(e) {
+    showState('err',e.message);
+    sbarStatus('Error exportando: '+e.message,'');
+  }
+}
+
+// SVG: client-side (render current state)
+$('btn-svg').addEventListener('click',()=>{
+  if(!S.data) return;
+  renderSVG();
+  const svg=$('svg-wrap').innerHTML;
+  const blob=new Blob([svg],{type:'image/svg+xml'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url;
+  a.download=`caron_${S.muni}_${S.el}.svg`; a.click();
+  URL.revokeObjectURL(url);
+});
+$('btn-dxf').addEventListener('click',()=>doExport('dxf','dxf'));
+$('btn-pdf').addEventListener('click',()=>doExport('pdf','pdf'));
+
+// ═══ TABS ══════════════════════════════════════════════════════════════════
+let _activeTab = 'inv';
+
+function switchTab(t) {
+  _activeTab = t;
+  ['inv','map'].forEach(id => {
+    $('tab-'+id).classList.toggle('active', id===t);
+    $('view-'+id).classList.toggle('active', id===t);
+  });
+  $('inv-toolbar').style.display = t==='inv' ? 'flex' : 'none';
+  $('map-toolbar').style.display = t==='map' ? 'flex' : 'none';
+
+  if (t==='map') {
+    // CRÍTICO: diferir hasta que el DOM haya repintado el contenedor
+    // (L.map() lee las dimensiones del div; si es 0 el mapa no renderiza)
+    requestAnimationFrame(() => {
+      if (!_leaflet) {
+        _initLeafletCore();
+        // Segundo RAF: el contenedor ya tiene tamaño real tras el primer repaint
+        requestAnimationFrame(() => {
+          _leaflet.invalidateSize();
+          if (S.data?.geo_features?.length) _loadGeoLayer();
+        });
+      } else {
+        _leaflet.invalidateSize();
+        if (S.data?.geo_features?.length && !_geoLayer) _loadGeoLayer();
+      }
+    });
+  }
+}
+
+// ═══ LEAFLET ═══════════════════════════════════════════════════════════════
+let _leaflet  = null;
+let _geoLayer = null;
+
+function _initLeafletCore() {
+  const el = document.getElementById('leaflet-map');
+  console.log('[leaflet] container size:', el.clientWidth, 'x', el.clientHeight);
+  try {
+    _leaflet = L.map('leaflet-map', {
+      center: [40.3, -3.75],
+      zoom: 12,
+      preferCanvas: true,
+      zoomControl: true,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 20,
+    }).addTo(_leaflet);
+    console.log('[leaflet] init OK');
+  } catch(e) {
+    console.error('[leaflet] init FAIL:', e);
+  }
+}
+
+function getMapStyle() {
+  return {
+    color:       gv('m-stroke'),
+    weight:      1.0,
+    fillColor:   gv('m-fill'),
+    fillOpacity: gf('m-alpha'),
+    opacity:     1.0,
+  };
+}
+
+function _loadGeoLayer() {
+  if (!_leaflet || !S.data?.geo_features?.length) return;
+  if (_geoLayer) { _leaflet.removeLayer(_geoLayer); _geoLayer = null; }
+
+  // Construir FeatureCollection GeoJSON
+  const features = [];
+  const polys = S.data.polygons || [];
+  S.data.geo_features.forEach((g, i) => {
+    if (!g || !g.type) return;
+    features.push({
+      type: 'Feature',
+      geometry: g,
+      properties: {
+        rank: polys[i]?.rank || i+1,
+        area: polys[i]?.area || 0,
+      },
+    });
+  });
+
+  if (!features.length) {
+    console.warn('[map] 0 features válidas para renderizar');
+    return;
+  }
+
+  const st = getMapStyle();
+  _geoLayer = L.geoJSON(
+    { type: 'FeatureCollection', features },
+    {
+      style: () => ({ ...st }),
+      // NO usamos onEachFeature con canvas — los tooltips van por mousemove global
+    }
+  ).addTo(_leaflet);
+
+  fitMap();
+
+  const n = features.length;
+  $('map-pinfo').innerHTML =
+    `<span class="hi">${(S.muni||'').toUpperCase()}</span>`+
+    ` &nbsp;·&nbsp; ${n.toLocaleString('es')} ${S.el}`+
+    ` &nbsp;·&nbsp; posición real`;
+
+  console.log(`[map] cargadas ${n} features. Bounds:`, S.data.map_bounds);
+}
+
+function fitMap() {
+  if (!_leaflet || !S.data?.map_bounds) return;
+  _leaflet.fitBounds(S.data.map_bounds, { padding: [24, 24] });
+}
+
+// Botón FIT
+$('map-fit').addEventListener('click', () => {
+  if (_leaflet && S.data?.map_bounds) fitMap();
+});
+
+// Actualizar estilo en tiempo real
+['m-fill','m-stroke'].forEach(id => {
+  $(id)?.addEventListener('input', () => {
+    if (_geoLayer) _geoLayer.setStyle(getMapStyle());
+  });
+});
+$('m-alpha').addEventListener('input', () => {
+  $('m-alpha-lbl').textContent = gf('m-alpha').toFixed(2);
+  if (_geoLayer) _geoLayer.setStyle(getMapStyle());
+});
+
+// ═══ MAP EXPORT ════════════════════════════════════════════════════════════
+function buildMapExportBody(withBasemap) {
+  const [fr,fg,fb] = hexRgb(gv('m-fill'));
+  const [sr,sg,sb] = hexRgb(gv('m-stroke'));
+  return {
+    job_id: S.jobId, municipio: S.muni,
+    with_basemap: withBasemap,
+    basemap_source: gv('map-src'),
+    fill_r:fr, fill_g:fg, fill_b:fb,
+    fill_alpha: gf('m-alpha'),
+    stroke_r:sr, stroke_g:sg, stroke_b:sb,
+    stroke_width: 0.5,
+    bg_r:1, bg_g:1, bg_b:1,
+    dpi: parseInt(gv('m-dpi')),
+    show_boundary: gb('m-boundary'),
+    show_scale: gb('m-scale'),
+  };
+}
+
+async function doMapExport(endpoint, ext, withBasemap) {
+  if (!S.jobId) return;
+  sbarStatus(`generando mapa ${ext.toUpperCase()}…`,'run');
+  try {
+    const r = await fetch('/api/export/'+endpoint, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(buildMapExportBody(withBasemap)),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url;
+    a.download = `mapa_${S.muni}_${S.el}_${withBasemap?'osm':'plano'}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+    sbarStatus(`mapa ${ext.toUpperCase()} exportado`,'on');
+  } catch(e) {
+    sbarStatus('Error: '+e.message,'');
+    showState('err', e.message);
+  }
+}
+
+$('btn-map-osm').addEventListener('click', () => doMapExport('map-png','png', true));
+$('btn-map-nofg').addEventListener('click', () => doMapExport('map-png','png', false));
+$('btn-map-svg').addEventListener('click', () => doMapExport('map-svg','svg', false));
+$('btn-map-dxf').addEventListener('click', () => doMapExport('map-dxf','dxf', false));
+
+
+</script>
+</body>
+</html>
