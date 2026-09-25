@@ -108,7 +108,8 @@ def _buscar_nominatim(q: str) -> list[dict]:
 def _overpass(query: str, timeout: int = 120) -> dict:
     """Consulta Overpass probando las instancias por turno; 429/5xx y cortes pasan a la siguiente."""
     errors = []
-    for attempt, url in enumerate(OVERPASS_MIRRORS * 2):
+    # cada instancia una vez y la principal otra al final: como mucho 4 esperas de `timeout`
+    for attempt, url in enumerate(OVERPASS_MIRRORS + OVERPASS_MIRRORS[:1]):
         try:
             r = requests.post(url, data={"data": query}, headers=HEADERS, timeout=timeout)
             if r.status_code in (429, 502, 503, 504):
@@ -118,8 +119,8 @@ def _overpass(query: str, timeout: int = 120) -> dict:
                 return r.json()
         except (requests.ConnectionError, requests.Timeout, ValueError) as e:
             errors.append(f"{url.split('/')[2]}: {type(e).__name__}")
-        if attempt >= len(OVERPASS_MIRRORS) - 1:
-            time.sleep(3)                       # segunda vuelta: dar respiro a los servidores
+        if attempt == len(OVERPASS_MIRRORS) - 1:
+            time.sleep(5)                       # antes del último intento, dar respiro
     raise RuntimeError("OpenStreetMap (Overpass) no responde ahora mismo; prueba en unos minutos. "
                        + "; ".join(errors[-3:]))
 
