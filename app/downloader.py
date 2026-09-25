@@ -5,6 +5,8 @@ Fuentes: Catastro INSPIRE bulk (principal) + OSM Overpass (fallback).
 
 import io
 import os
+import threading
+import time
 import zipfile
 import tempfile
 from pathlib import Path
@@ -17,7 +19,13 @@ from shapely.ops import unary_union, polygonize, linemerge
 HEADERS = {
     "User-Agent": "CaronInventario/1.0 (academic project; contact: github.com/caron-inventario)"
 }
-OVERPASS         = "https://overpass-api.de/api/interpreter"
+# Overpass va a menudo saturado (504/429): se prueban varias instancias públicas
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
+OVERPASS         = OVERPASS_MIRRORS[0]
 NOMINATIM        = "https://nominatim.openstreetmap.org"
 CATASTRO_INSPIRE_BASE = "https://www.catastro.hacienda.gob.es/INSPIRE"
 
@@ -28,8 +36,35 @@ _CACHE_DIR.mkdir(exist_ok=True)
 
 # ── Búsqueda ──────────────────────────────────────────────────────────────────
 
+# Nominatim pide como mucho 1 petición por segundo; la UI busca mientras se escribe, así que
+# se cachean las respuestas y se espacian las peticiones desde el servidor.
+_search_cache: dict[str, list[dict]] = {}
+_search_lock = threading.Lock()
+_search_last = [0.0]
+
+
 def buscar_municipio(q: str) -> list[dict]:
     """Busca municipios espanoles por nombre. Devuelve lista de candidatos."""
+    key = " ".join(q.lower().split())
+    if key in _search_cache:
+        return _search_cache[key]
+    with _search_lock:
+        if key in _search_cache:
+            return _search_cache[key]
+        wait = 1.0 - (time.monotonic() - _search_last[0])
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            out = _buscar_nominatim(q)
+        finally:
+            _search_last[0] = time.monotonic()
+        if len(_search_cache) > 500:
+            _search_cache.clear()
+        _search_cache[key] = out
+        return out
+
+
+def _buscar_nominatim(q: str) -> list[dict]:
     r = requests.get(
         f"{NOMINATIM}/search",
         params={
@@ -51,16 +86,18 @@ def buscar_municipio(q: str) -> list[dict]:
             if item.get("class") != "boundary":
                 continue
         addr = item.get("address", {})
+        bb = item.get("boundingbox") or []          # [sur, norte, oeste, este] como texto
         out.append({
             "display_name": item["display_name"],
             "osm_id":       item["osm_id"],
             "osm_type":     item["osm_type"],
             "lat":          float(item["lat"]),
             "lon":          float(item["lon"]),
+            "bounds":       [[float(bb[0]), float(bb[2])], [float(bb[1]), float(bb[3])]] if len(bb) == 4 else None,
             "municipio":    (addr.get("municipality") or addr.get("city")
                              or addr.get("town") or addr.get("village")
                              or addr.get("hamlet") or q),
-            "provincia":    addr.get("province", addr.get("county", "")),
+            "provincia":    addr.get("province") or addr.get("state_district") or addr.get("county", ""),
             "comunidad":    addr.get("state", ""),
         })
     return out
@@ -69,9 +106,22 @@ def buscar_municipio(q: str) -> list[dict]:
 # ── Límite municipal ───────────────────────────────────────────────────────────
 
 def _overpass(query: str, timeout: int = 120) -> dict:
-    r = requests.post(OVERPASS, data={"data": query}, headers=HEADERS, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    """Consulta Overpass probando las instancias por turno; 429/5xx y cortes pasan a la siguiente."""
+    errors = []
+    for attempt, url in enumerate(OVERPASS_MIRRORS * 2):
+        try:
+            r = requests.post(url, data={"data": query}, headers=HEADERS, timeout=timeout)
+            if r.status_code in (429, 502, 503, 504):
+                errors.append(f"{url.split('/')[2]}: HTTP {r.status_code}")
+            else:
+                r.raise_for_status()
+                return r.json()
+        except (requests.ConnectionError, requests.Timeout, ValueError) as e:
+            errors.append(f"{url.split('/')[2]}: {type(e).__name__}")
+        if attempt >= len(OVERPASS_MIRRORS) - 1:
+            time.sleep(3)                       # segunda vuelta: dar respiro a los servidores
+    raise RuntimeError("OpenStreetMap (Overpass) no responde ahora mismo; prueba en unos minutos. "
+                       + "; ".join(errors[-3:]))
 
 
 def obtener_limite(osm_type: str, osm_id: int) -> gpd.GeoDataFrame:
@@ -155,8 +205,19 @@ def _clip_to_boundary(gdf: gpd.GeoDataFrame, boundary_utm: gpd.GeoDataFrame) -> 
     bnd = unary_union(boundary_utm.geometry)
     gdf = gdf[gdf.geometry.intersects(bnd)].copy()
     gdf.geometry = gdf.geometry.intersection(bnd)
-    gdf = gdf[gdf.geometry.is_valid & ~gdf.geometry.is_empty].copy()
+    # el recorte en el borde puede dejar colecciones con líneas o puntos: solo lo poligonal
+    gdf.geometry = gdf.geometry.apply(_solo_poligonos)
+    gdf = gdf[gdf.geometry.notna() & gdf.geometry.is_valid & ~gdf.geometry.is_empty].copy()
     return gdf.reset_index(drop=True)
+
+
+def _solo_poligonos(g):
+    if g is None or g.geom_type in ("Polygon", "MultiPolygon"):
+        return g
+    if g.geom_type == "GeometryCollection":
+        parts = [p for p in g.geoms if p.geom_type in ("Polygon", "MultiPolygon")]
+        return unary_union(parts) if parts else None
+    return None
 
 
 def _ref_ine(boundary_utm: gpd.GeoDataFrame) -> str:
@@ -238,7 +299,9 @@ def _catastro_inspire_bulk(
                 # Para BU: usar building.gml (excluir buildingpart y otherconstruction)
                 # Para CP: usar el primero que no sea metadata
                 gml_names = [n for n in z.namelist() if n.lower().endswith(".gml")]
-                exclude   = {"buildingpart", "otherconstruction"}
+                # CP trae también cadastralzoning.gml (zonas, no parcelas): según el orden
+                # del ZIP se cogía ese en lugar de las parcelas
+                exclude   = {"buildingpart", "otherconstruction", "cadastralzoning"}
                 main_gml  = next(
                     (n for n in gml_names
                      if not any(ex in n.lower() for ex in exclude)),
@@ -280,6 +343,18 @@ def _catastro_inspire_bulk(
         return None
 
 
+def _sin_catastro(ref: str, que: str) -> str:
+    """Motivo legible de que el Catastro no haya dado nada (antes salía «0 encontrados»)."""
+    if not ref:
+        return (f"OSM no tiene el código INE de este municipio y el Catastro lo necesita para "
+                f"descargar {que}. Prueba con fuente Auto u OSM.")
+    if ref[:2] in ("01", "20", "31", "48"):
+        return (f"Este municipio está en territorio foral (País Vasco o Navarra), que tiene su propio "
+                f"catastro: no hay {que} en el Catastro estatal. Prueba con fuente OSM.")
+    return (f"El Catastro no ha servido {que} para el municipio {ref[:5]} (su servidor no responde o no "
+            f"lo publica). Prueba otra vez en un rato o con fuente Auto u OSM.")
+
+
 # ── Edificios ──────────────────────────────────────────────────────────────────
 
 def descargar_edificios(
@@ -302,7 +377,7 @@ def descargar_edificios(
         else:
             print("[edificios] ref:ine no disponible en OSM" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
         if fuente == "catastro":
-            return gpd.GeoDataFrame(columns=["geometry"], crs="EPSG:25830")
+            raise ValueError(_sin_catastro(ref, "edificios"))
         print("[edificios] usando OSM como fallback")
 
     # OSM Overpass
@@ -411,7 +486,7 @@ def descargar_parcelas(
         else:
             print("[parcelas] ref:ine no disponible en OSM" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
         if fuente == "catastro":
-            return gpd.GeoDataFrame(columns=["geometry"], crs="EPSG:25830")
+            raise ValueError(_sin_catastro(ref, "parcelas"))
         print("[parcelas] usando OSM landuse como fallback")
 
     # Fallback: landuse de OSM como proxy de parcelas

@@ -787,28 +787,40 @@ function sbarClear() {
 }
 
 // ═══ SEARCH ═══════════════════════════════════════════════════════════════
-let _st = null;
+let _st = null, _seq = 0;
 $('search').addEventListener('input', () => {
   clearTimeout(_st);
   const q = $('search').value.trim();
-  if (q.length < 2) { $('dd').style.display='none'; return; }
-  _st = setTimeout(() => doSearch(q), 380);
+  if (q.length < 3) { $('dd').style.display='none'; return; }
+  _st = setTimeout(() => doSearch(q), 600);
 });
+$('search').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { clearTimeout(_st); const q = $('search').value.trim(); if (q.length >= 2) doSearch(q); }
+});
+function ddMessage(msg) {
+  $('dd').innerHTML = `<div class="d-item" style="cursor:default"><span class="d-item-sub">${msg}</span></div>`;
+  $('dd').style.display = 'block';
+}
 document.addEventListener('click', e => { if (!e.target.closest('.search-wrap')) $('dd').style.display='none'; });
 
 async function doSearch(q) {
+  const my = ++_seq;
+  ddMessage('buscando…');
   try {
     const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    const items = await r.json();
-    renderDD(items);
-  } catch(e) { sbarStatus('Error búsqueda: '+e.message, ''); }
+    const body = await r.json();
+    if (my !== _seq) return;                        // ya se ha escrito otra cosa
+    if (!r.ok) { ddMessage(body.detail || 'la búsqueda no responde'); return; }
+    if (!body.length) { ddMessage(`ningún municipio con «${q}»`); return; }
+    renderDD(body);
+  } catch(e) { if (my === _seq) ddMessage('Error de red en la búsqueda'); }
 }
 
 function renderDD(items) {
   const dd = $('dd');
   if (!items.length) { dd.style.display='none'; return; }
-  dd.innerHTML = items.slice(0,8).map(it => `
-    <div class="d-item" data-type="${it.osm_type}" data-id="${it.osm_id}" data-name="${it.municipio}">
+  dd.innerHTML = items.slice(0,8).map((it, i) => `
+    <div class="d-item" data-i="${i}" data-type="${it.osm_type}" data-id="${it.osm_id}" data-name="${it.municipio}">
       <span class="d-item-name">${it.municipio || it.display_name.split(',')[0]}</span>
       <span class="d-item-sub">${[it.provincia,it.comunidad].filter(Boolean).join(' · ') || it.display_name.split(',').slice(1,3).join(',')}</span>
     </div>`).join('');
@@ -822,8 +834,26 @@ function renderDD(items) {
       $('muni-info').textContent = el.querySelector('.d-item-sub').textContent;
       dd.style.display='none';
       S.tsuchi = false;   // elegir municipio sustituye a los datos de tsuchi
+      showPlace(items[+el.dataset.i]);
     });
   });
+}
+
+// Lleva el mapa al municipio elegido, para ver que es el sitio correcto antes de generar.
+let _placeLayer = null;
+function showPlace(it) {
+  S.place = it;
+  sbarStatus(`${(it.municipio||'').toUpperCase()} — pulsa Generar para descargar sus ${document.querySelector('input[name="el"]:checked').value}`, 'on');
+  switchTab('map');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (!_leaflet) return;
+    if (_placeLayer) _leaflet.removeLayer(_placeLayer);
+    _placeLayer = it.bounds
+      ? L.rectangle(it.bounds, {color:'#c00', weight:1.5, fill:false, dashArray:'6 4'})
+      : L.circleMarker([it.lat, it.lon], {radius:8, color:'#c00'});
+    _placeLayer.addTo(_leaflet);
+    if (it.bounds) _leaflet.fitBounds(it.bounds, {padding:[24,24]}); else _leaflet.setView([it.lat, it.lon], 13);
+  }));
 }
 
 // ═══ GENERATE ═════════════════════════════════════════════════════════════
@@ -1301,7 +1331,8 @@ $('btn-map-dxf').addEventListener('click', () => doMapExport('map-dxf','dxf', fa
     if (d.status === 'staged') {
       S.tsuchi = true;
       $('muni-info').textContent = `datos de tsuchi · ${d.n_input.toLocaleString('es')} ${d.elemento} · ${d.fuente_real.replace('tsuchi:','')}`;
-      sbarStatus(`${d.n_input.toLocaleString('es')} ${d.elemento} de tsuchi listos — ajusta el layout y pulsa Generar`, 'on');
+      // Caron es rápido: se calcula ya con el layout por defecto; Generar lo rehace con otro
+      runTsuchi();
     } else {
       poll();
     }

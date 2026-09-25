@@ -3,6 +3,7 @@ FastAPI backend para el inventario Caron de municipios espanoles.
 """
 
 import asyncio
+import os
 import threading
 import uuid
 from datetime import datetime
@@ -32,6 +33,18 @@ if STATIC_DIR.exists():
 # ── Job store (in-memory) ──────────────────────────────────────────────────────
 
 _jobs: dict[str, dict] = {}
+# Cada job guarda su GeoDataFrame y su resultado: sin límite, la memoria solo crece.
+MAX_JOBS = int(os.environ.get("CARON_MAX_JOBS", "30"))
+
+
+def _new_job(data: dict) -> str:
+    """Registra un job y descarta los más antiguos que ya no estén en marcha."""
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = data
+    idle = [j for j, d in _jobs.items() if d["status"] in ("done", "error", "staged") and j != job_id]
+    for j in idle[: max(0, len(_jobs) - MAX_JOBS)]:
+        _jobs.pop(j, None)
+    return job_id
 
 
 def _job_worker(
@@ -156,27 +169,29 @@ async def root():
     return HTMLResponse("<h1>Caron Inventario</h1><p>Frontend not found</p>")
 
 
+# Las rutas que esperan a la red o calculan (búsqueda, estado, exportaciones) son `def`, no
+# `async def`: FastAPI las corre en hilos. Como `async def` bloqueaban el bucle de eventos y,
+# mientras Nominatim o matplotlib tardaban, el servidor entero dejaba de responder.
 @app.get("/api/search")
-async def search(q: str = Query(..., min_length=2)):
+def search(q: str = Query(..., min_length=2)):
     """Busca municipios por nombre."""
     try:
         return dl.buscar_municipio(q)
     except Exception as e:
-        raise HTTPException(502, str(e))
+        raise HTTPException(502, f"La búsqueda de municipios (Nominatim) no responde: {e}")
 
 
 @app.post("/api/generate")
 async def generate(req: GenerateRequest):
     """Inicia la descarga y procesado. Devuelve job_id para consultar estado."""
-    job_id = str(uuid.uuid4())
     params = req.caron_params()
-    _jobs[job_id] = {
+    job_id = _new_job({
         "status": "queued",
         "created": datetime.utcnow().isoformat(),
         "elemento": req.elemento,
         "result": None,
         "error": None,
-    }
+    })
     t = threading.Thread(
         target=_job_worker,
         args=(job_id, req.osm_type, req.osm_id, req.elemento, params, req.fuente),
@@ -196,6 +211,7 @@ async def run_job(job_id: str, req: LayoutRequest):
     if job.get("gdf") is None or job["status"] not in ("staged", "done", "error"):
         raise HTTPException(409, f"El job está {job['status']}: no tiene datos listos")
     job["error"] = None
+    job["_payload"] = None
     job["status"] = "queued"
     threading.Thread(target=_run_worker, args=(job_id, req.caron_params()), daemon=True).start()
     return {"job_id": job_id}
@@ -224,19 +240,18 @@ def tsuchi_import(body: dict, x_tsuchi_key: Optional[str] = Header(default=None)
         raise HTTPException(502, f"No se pudo leer el activo de tsuchi: {e}")
     if len(data["gdf"]) == 0:
         raise HTTPException(422, f"El activo no tiene {data['elemento']}")
-    job_id = str(uuid.uuid4())
-    _jobs[job_id] = {
+    job_id = _new_job({
         "status": "staged",
         "created": datetime.utcnow().isoformat(),
         "result": None,
         "error": None,
         **data,
-    }
+    })
     return {"job_id": job_id, "open": f"/?job={job_id}"}
 
 
 @app.get("/api/status/{job_id}")
-async def status(job_id: str):
+def status(job_id: str):
     """Devuelve el estado del job y, si esta done, los datos del inventario."""
     job = _jobs.get(job_id)
     if job is None:
@@ -260,6 +275,10 @@ async def status(job_id: str):
             "error": job.get("error"),
         }
 
+    # la respuesta de un job terminado no cambia hasta que se recalcula: se guarda
+    if job.get("_payload") is not None:
+        return job["_payload"]
+
     result: caron.CaronResult = job["result"]
     p = result.params
     gdf = job.get("gdf")
@@ -281,7 +300,7 @@ async def status(job_id: str):
                 continue
             geo_features.append(shp_mapping(g))
 
-    return {
+    job["_payload"] = {
         "status": "done",
         "elemento": job["elemento"],
         "fuente_real": job.get("fuente_real", "desconocida"),
@@ -315,10 +334,11 @@ async def status(job_id: str):
         "geo_features": geo_features,
         "map_bounds": map_bounds,
     }
+    return job["_payload"]
 
 
 @app.post("/api/export/svg")
-async def export_svg(req: ExportRequest):
+def export_svg(req: ExportRequest):
     job = _jobs.get(req.job_id)
     if job is None or job["status"] != "done":
         raise HTTPException(404, "Job no listo")
@@ -337,7 +357,7 @@ async def export_svg(req: ExportRequest):
 
 
 @app.post("/api/export/dxf")
-async def export_dxf(req: ExportRequest):
+def export_dxf(req: ExportRequest):
     job = _jobs.get(req.job_id)
     if job is None or job["status"] != "done":
         raise HTTPException(404, "Job no listo")
@@ -351,7 +371,7 @@ async def export_dxf(req: ExportRequest):
 
 
 @app.post("/api/export/pdf")
-async def export_pdf(req: ExportRequest):
+def export_pdf(req: ExportRequest):
     job = _jobs.get(req.job_id)
     if job is None or job["status"] != "done":
         raise HTTPException(404, "Job no listo")
@@ -396,7 +416,7 @@ class MapExportRequest(BaseModel):
 
 
 @app.post("/api/export/map-png")
-async def export_map_png(req: MapExportRequest):
+def export_map_png(req: MapExportRequest):
     job = _jobs.get(req.job_id)
     if job is None or job["status"] != "done":
         raise HTTPException(404, "Job no listo")
@@ -427,7 +447,7 @@ async def export_map_png(req: MapExportRequest):
 
 
 @app.post("/api/export/map-svg")
-async def export_map_svg(req: MapExportRequest):
+def export_map_svg(req: MapExportRequest):
     job = _jobs.get(req.job_id)
     if job is None or job["status"] != "done":
         raise HTTPException(404, "Job no listo")
@@ -455,7 +475,7 @@ async def export_map_svg(req: MapExportRequest):
 
 
 @app.post("/api/export/map-dxf")
-async def export_map_dxf(req: MapExportRequest):
+def export_map_dxf(req: MapExportRequest):
     job = _jobs.get(req.job_id)
     if job is None or job["status"] != "done":
         raise HTTPException(404, "Job no listo")
