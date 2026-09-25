@@ -462,7 +462,9 @@ def descargar_manzanas(
     gdf = gdf[(gdf.area >= min_area) & (gdf.area <= max_area)].copy()
     gdf = _clip_to_boundary(gdf, boundary_utm)
     gdf["area"] = gdf.geometry.area
-    return gdf[(gdf.area >= min_area)].reset_index(drop=True)
+    gdf = gdf[(gdf.area >= min_area)].reset_index(drop=True)
+    gdf.attrs["fuente_real"] = "osm"
+    return gdf
 
 
 # ── Parcelas ───────────────────────────────────────────────────────────────────
