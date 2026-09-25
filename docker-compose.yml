@@ -1,0 +1,26 @@
+# docker compose up -d   →   http://localhost:8014
+#
+# Para recibir datos de un hub tsuchi, unir el servicio a su red Docker con el alias
+# que usa el tools.toml del hub. Se hace en cada servidor, en docker-compose.override.yml
+# (sin versionar), para que este compose siga arrancando solo donde no hay tsuchi:
+#
+#   services:
+#     fruteria:
+#       networks:
+#         default: {}
+#         tsuchi: { aliases: [fruteria] }
+#   networks:
+#     tsuchi: { external: true }
+
+services:
+  fruteria:
+    build: .
+    image: fruteria:latest
+    container_name: fruteria
+    ports:
+      - "127.0.0.1:${FRUTERIA_PORT:-8014}:8000"
+    environment:
+      # hosts de los que la importación de tsuchi acepta ficheros, y clave opcional
+      TSUCHI_DATA_HOSTS: ${TSUCHI_DATA_HOSTS:-tsuchi-data}
+      TSUCHI_IMPORT_KEY: ${TSUCHI_IMPORT_KEY:-}
+    restart: unless-stopped

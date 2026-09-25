@@ -752,6 +752,7 @@ const S = {
   data:     null,
   zoom:     1.0,
   timer:    null,
+  tsuchi:   false,   // el job trae datos de tsuchi: Generar recalcula sobre ellos, sin municipio
 };
 
 // ═══ DOM ══════════════════════════════════════════════════════════════════
@@ -820,12 +821,45 @@ function renderDD(items) {
       $('search').value   = S.muni;
       $('muni-info').textContent = el.querySelector('.d-item-sub').textContent;
       dd.style.display='none';
+      S.tsuchi = false;   // elegir municipio sustituye a los datos de tsuchi
     });
   });
 }
 
 // ═══ GENERATE ═════════════════════════════════════════════════════════════
+function layoutBody() {
+  return {
+    sort_mode: gv('sort'),
+    sheet_width: gf('sw'), col_spacing: gf('csp'), row_spacing: gf('rsp'),
+    scale_factor: gf('scale'), rotate_to_fit: gb('rot'),
+    min_area: gf('amin'), max_area: gf('amax'),
+    simplify_tolerance: gf('simp'),
+  };
+}
+
+// Datos de tsuchi: el job ya los tiene; Generar solo recalcula el inventario.
+async function runTsuchi() {
+  $('btn-gen').disabled = true;
+  ['svg','dxf','pdf'].forEach(x => $('btn-'+x).disabled = true);
+  S.data = null;
+  sbarClear();
+  sbarStatus('calculando inventario…','run');
+  showState('load','algoritmo Caron');
+  try {
+    const r = await fetch(`/api/jobs/${S.jobId}/run`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(layoutBody())
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    poll();
+  } catch(e) {
+    showState('err', e.message);
+    sbarStatus('Error: '+e.message,'');
+    $('btn-gen').disabled=false;
+  }
+}
+
 $('btn-gen').addEventListener('click', async () => {
+  if (S.tsuchi && S.jobId) { runTsuchi(); return; }
   const osmType = gv('osm-type'), osmId = parseInt(gv('osm-id'));
   if (!osmType || !osmId) { alert('Selecciona un municipio de la lista.'); return; }
 
@@ -841,11 +875,7 @@ $('btn-gen').addEventListener('click', async () => {
   const body = {
     osm_type: osmType, osm_id: osmId, elemento: S.el,
     fuente: document.querySelector('input[name="fuente"]:checked').value,
-    sort_mode: gv('sort'),
-    sheet_width: gf('sw'), col_spacing: gf('csp'), row_spacing: gf('rsp'),
-    scale_factor: gf('scale'), rotate_to_fit: gb('rot'),
-    min_area: gf('amin'), max_area: gf('amax'),
-    simplify_tolerance: gf('simp'),
+    ...layoutBody(),
   };
 
   try {
@@ -1248,6 +1278,37 @@ $('btn-map-osm').addEventListener('click', () => doMapExport('map-png','png', tr
 $('btn-map-nofg').addEventListener('click', () => doMapExport('map-png','png', false));
 $('btn-map-svg').addEventListener('click', () => doMapExport('map-svg','svg', false));
 $('btn-map-dxf').addEventListener('click', () => doMapExport('map-dxf','dxf', false));
+
+// ═══ TSUCHI ═══════════════════════════════════════════════════════════════
+// ?job=<id>: un job que tsuchi ha dejado preparado con sus datos. Se lee una vez
+// y se quita de la URL, para que recargar no lo vuelva a imponer.
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const id = q.get('job');
+  if (!id) return;
+  q.delete('job');
+  history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q : ''));
+  try {
+    const r = await fetch(`/api/status/${id}`);
+    if (!r.ok) throw new Error('el trabajo ya no existe (¿se reinició FruterIA?)');
+    const d = await r.json();
+    S.jobId = id;
+    S.el = d.elemento;
+    S.muni = d.label || 'tsuchi';
+    const radio = document.querySelector(`input[name="el"][value="${d.elemento}"]`);
+    if (radio) radio.checked = true;
+    $('search').value = S.muni;
+    if (d.status === 'staged') {
+      S.tsuchi = true;
+      $('muni-info').textContent = `datos de tsuchi · ${d.n_input.toLocaleString('es')} ${d.elemento} · ${d.fuente_real.replace('tsuchi:','')}`;
+      sbarStatus(`${d.n_input.toLocaleString('es')} ${d.elemento} de tsuchi listos — ajusta el layout y pulsa Generar`, 'on');
+    } else {
+      poll();
+    }
+  } catch(e) {
+    sbarStatus('tsuchi: '+e.message, '');
+  }
+})();
 
 
 </script>

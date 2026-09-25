@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Optional, Literal
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Header
 from fastapi.responses import Response, FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ from . import downloader as dl
 from . import caron
 from .caron import CaronParams
 from . import exporter
+from . import tsuchi
 from .exporter import SvgStyle, PdfParams, MapStyle, export_map_dxf
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -70,13 +71,23 @@ def _job_worker(
         _jobs[job_id]["error"] = str(e)
 
 
+def _run_worker(job_id: str, params: CaronParams):
+    """Caron sobre los datos que el trabajo ya tiene (importados de tsuchi, o de
+    una generación anterior): sin volver a descargar nada."""
+    job = _jobs[job_id]
+    try:
+        job["status"] = "processing"
+        job["result"] = caron.run(job["gdf"], params)
+        job["status"] = "done"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
 # ── Models ────────────────────────────────────────────────────────────────────
 
-class GenerateRequest(BaseModel):
-    osm_type: str
-    osm_id: int
-    elemento: Literal["edificios", "manzanas", "parcelas"] = "edificios"
-    fuente: Literal["catastro", "osm", "auto"] = "catastro"
+class LayoutRequest(BaseModel):
+    """Parámetros del inventario (lo que se ajusta antes de pulsar Generar)."""
     sort_mode: Literal["area", "perimeter", "width", "height"] = "area"
     sheet_width: float = Field(400.0, gt=0)
     col_spacing: float = Field(4.0, ge=0)
@@ -86,6 +97,26 @@ class GenerateRequest(BaseModel):
     min_area: float = Field(0.0, ge=0)
     max_area: float = Field(0.0, ge=0)  # 0 = sin limite
     simplify_tolerance: float = Field(0.0, ge=0)
+
+    def caron_params(self) -> CaronParams:
+        return CaronParams(
+            sort_mode=self.sort_mode,
+            sheet_width=self.sheet_width,
+            col_spacing=self.col_spacing,
+            row_spacing=self.row_spacing,
+            scale_factor=self.scale_factor,
+            rotate_to_fit=self.rotate_to_fit,
+            min_area=self.min_area,
+            max_area=self.max_area if self.max_area > 0 else float("inf"),
+            simplify_tolerance=self.simplify_tolerance,
+        )
+
+
+class GenerateRequest(LayoutRequest):
+    osm_type: str
+    osm_id: int
+    elemento: Literal["edificios", "manzanas", "parcelas"] = "edificios"
+    fuente: Literal["catastro", "osm", "auto"] = "catastro"
 
 
 class ExportRequest(BaseModel):
@@ -138,17 +169,7 @@ async def search(q: str = Query(..., min_length=2)):
 async def generate(req: GenerateRequest):
     """Inicia la descarga y procesado. Devuelve job_id para consultar estado."""
     job_id = str(uuid.uuid4())
-    params = CaronParams(
-        sort_mode=req.sort_mode,
-        sheet_width=req.sheet_width,
-        col_spacing=req.col_spacing,
-        row_spacing=req.row_spacing,
-        scale_factor=req.scale_factor,
-        rotate_to_fit=req.rotate_to_fit,
-        min_area=req.min_area,
-        max_area=req.max_area if req.max_area > 0 else float("inf"),
-        simplify_tolerance=req.simplify_tolerance,
-    )
+    params = req.caron_params()
     _jobs[job_id] = {
         "status": "queued",
         "created": datetime.utcnow().isoformat(),
@@ -165,12 +186,73 @@ async def generate(req: GenerateRequest):
     return {"job_id": job_id}
 
 
+@app.post("/api/jobs/{job_id}/run")
+async def run_job(job_id: str, req: LayoutRequest):
+    """Calcula el inventario sobre los datos que el job ya tiene (importados de
+    tsuchi o de una generación anterior) con otro layout, sin descargar."""
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Job no encontrado")
+    if job.get("gdf") is None or job["status"] not in ("staged", "done", "error"):
+        raise HTTPException(409, f"El job está {job['status']}: no tiene datos listos")
+    job["error"] = None
+    job["status"] = "queued"
+    threading.Thread(target=_run_worker, args=(job_id, req.caron_params()), daemon=True).start()
+    return {"job_id": job_id}
+
+
+# ── tsuchi ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/tsuchi/info")
+async def tsuchi_info(x_tsuchi_key: Optional[str] = Header(default=None)):
+    if not tsuchi.check_key(x_tsuchi_key):
+        raise HTTPException(401, "Falta X-Tsuchi-Key o no es la correcta")
+    return tsuchi.info()
+
+
+@app.post("/api/tsuchi/import", status_code=201)
+def tsuchi_import(body: dict, x_tsuchi_key: Optional[str] = Header(default=None)):
+    """Recibe un activo de tsuchi y lo deja preparado. Síncrona (hilo del pool):
+    baja el GeoPackage antes de responder, para que la UI lo encuentre ya."""
+    if not tsuchi.check_key(x_tsuchi_key):
+        raise HTTPException(401, "Falta X-Tsuchi-Key o no es la correcta")
+    try:
+        data = tsuchi.load(body)
+    except tsuchi.TsuchiImportError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"No se pudo leer el activo de tsuchi: {e}")
+    if len(data["gdf"]) == 0:
+        raise HTTPException(422, f"El activo no tiene {data['elemento']}")
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {
+        "status": "staged",
+        "created": datetime.utcnow().isoformat(),
+        "result": None,
+        "error": None,
+        **data,
+    }
+    return {"job_id": job_id, "open": f"/?job={job_id}"}
+
+
 @app.get("/api/status/{job_id}")
 async def status(job_id: str):
     """Devuelve el estado del job y, si esta done, los datos del inventario."""
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(404, "Job no encontrado")
+
+    if job["status"] == "staged":
+        gdf = job["gdf"]
+        b = gdf.to_crs("EPSG:4326").total_bounds
+        return {
+            "status": "staged",
+            "elemento": job["elemento"],
+            "fuente_real": job.get("fuente_real"),
+            "label": job.get("label", ""),
+            "n_input": int(len(gdf)),
+            "map_bounds": [[round(b[1], 5), round(b[0], 5)], [round(b[3], 5), round(b[2], 5)]],
+        }
 
     if job["status"] != "done":
         return {
