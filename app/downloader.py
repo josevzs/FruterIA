@@ -20,10 +20,11 @@ HEADERS = {
     "User-Agent": "CaronInventario/1.0 (academic project; contact: github.com/caron-inventario)"
 }
 # Overpass va a menudo saturado (504/429): se prueban varias instancias públicas
+# comprobado el 2026-09-30: kumi.systems y private.coffee no contestaban; maps.mail.ru sí
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
 ]
 OVERPASS         = OVERPASS_MIRRORS[0]
 NOMINATIM        = "https://nominatim.openstreetmap.org"
