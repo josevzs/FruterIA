@@ -4,6 +4,7 @@ Fuentes: Catastro INSPIRE bulk (principal) + OSM Overpass (fallback).
 """
 
 import io
+import json
 import os
 import threading
 import time
@@ -144,8 +145,9 @@ def obtener_limite(osm_type: str, osm_id: int) -> gpd.GeoDataFrame:
 
     el   = elements[0]
     tags = el.get("tags", {})
-    # ref:ine → código INE del municipio (5 dígitos: PP + MMM)
+    # ref:ine → código INE del municipio (5 dígitos: PP + MMM; OSM suele traer 11)
     ref_ine = tags.get("ref:ine", "")
+    nombre = tags.get("name", "")
 
     geom = None
 
@@ -192,7 +194,7 @@ def obtener_limite(osm_type: str, osm_id: int) -> gpd.GeoDataFrame:
         if geom is None or geom.is_empty:
             raise ValueError(f"No se pudo construir el limite de {osm_type}/{osm_id}")
 
-    gdf = gpd.GeoDataFrame({"geometry": [geom], "ref_ine": [ref_ine]}, crs="EPSG:4326")
+    gdf = gpd.GeoDataFrame({"geometry": [geom], "ref_ine": [ref_ine], "nombre": [nombre]}, crs="EPSG:4326")
     return gdf.to_crs("EPSG:25830")
 
 
@@ -238,54 +240,128 @@ def _ref_ine(boundary_utm: gpd.GeoDataFrame) -> str:
 # Tipos: Buildings (BU), CadastralParcels (CP)
 
 import re as _re
+import unicodedata as _ud
 
-def _catastro_atom_url(ref_ine: str, tipo_cap: str, tipo_lower: str) -> str | None:
-    """Busca en el ATOM feed de provincia la URL de descarga exacta del municipio."""
-    province = ref_ine[:2]
-    muni_code = ref_ine[:5].zfill(5)
+# Consulta pública del Catastro: la parcela más cercana a un punto, con provincia y municipio (INE)
+CATASTRO_RCCOOR = ("https://ovc.catastro.meh.es/OVCServWeb/OVCWcfCallejero/COVCCoordenadas.svc/json/"
+                   "Consulta_RCCOOR_Distancia")
+_atom_cache: dict[str, str] = {}
 
-    atom_url = (
-        f"{CATASTRO_INSPIRE_BASE}/{tipo_cap}/{province}/"
-        f"ES.SDGC.{tipo_lower}.atom_{province}.xml"
-    )
+
+def _norm(s: str) -> str:
+    """Nombre comparable: mayúsculas, sin tildes ni signos («Alcalá de Henares» = «ALCALA DE HENARES»)."""
+    s = _ud.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return _re.sub(r"[^A-Z0-9]+", " ", s.upper()).strip()
+
+
+def _catastro_en_punto(lon: float, lat: float) -> dict | None:
+    """Provincia, municipio INE y dirección de la parcela catastral más cercana al punto."""
     try:
+        r = requests.get(CATASTRO_RCCOOR, params={"SRS": "EPSG:4326", "CoorX": f"{lon:.6f}", "CoorY": f"{lat:.6f}"},
+                         headers=HEADERS, timeout=30)
+        d = json.loads(r.content.decode("utf-8-sig"))   # el servicio antepone un BOM
+    except Exception as e:
+        print(f"[catastro_municipio] consulta por coordenadas: {e}")
+        return None
+    res = d.get("Consulta_RCCOOR_DistanciaResult") or {}
+    coordd = (res.get("coordenadas_distancias") or {}).get("coordd") or []
+    for c in coordd if isinstance(coordd, list) else [coordd]:
+        lpcd = c.get("lpcd") or []
+        for p in lpcd if isinstance(lpcd, list) else [lpcd]:
+            loine = (p.get("dt") or {}).get("loine") or {}
+            if str(loine.get("cp", "")).isdigit() and str(loine.get("cm", "")).isdigit():
+                return {"ine": f"{int(loine['cp']):02d}{int(loine['cm']):03d}", "ldt": p.get("ldt") or ""}
+    return None
+
+
+def _atom_entradas(tipo_cap: str, tipo_lower: str, province: str) -> list[dict]:
+    """Municipios del ATOM provincial: código del Catastro, nombre, ZIP y envolvente (lon/lat)."""
+    atom_url = f"{CATASTRO_INSPIRE_BASE}/{tipo_cap}/{province}/ES.SDGC.{tipo_lower}.atom_{province}.xml"
+    if atom_url not in _atom_cache:
         r = requests.get(atom_url, headers=HEADERS, timeout=30)
         if r.status_code != 200:
             print(f"[catastro_atom] HTTP {r.status_code} para {atom_url}")
-            return None
-        # Buscar href que contenga el código municipal exacto
-        pattern = rf'href="([^"]*/{muni_code}[^"]*\.zip)"'
-        m = _re.search(pattern, r.text)
-        if m:
-            return m.group(1)
-        print(f"[catastro_atom] no encontrado {muni_code} en el feed")
+            return []
+        _atom_cache[atom_url] = r.text
+    out = []
+    for entry in _re.findall(r"<entry>(.*?)</entry>", _atom_cache[atom_url], _re.S):
+        m = _re.search(r'href="([^"]*/(\d{5})-([^/"]*)/[^"]*\.zip)"', entry)
+        if not m:
+            continue
+        bbox = None
+        g = _re.search(r"<georss:polygon>([^<]+)</georss:polygon>", entry)
+        if g:
+            nums = [float(v) for v in g.group(1).split()]
+            bbox = (min(nums[1::2]), min(nums[0::2]), max(nums[1::2]), max(nums[0::2]))
+        out.append({"code": m.group(2), "name": m.group(3).strip(), "url": m.group(1), "bbox": bbox})
+    return out
+
+
+def _municipio_catastro(boundary_utm: gpd.GeoDataFrame, tipo_cap: str, tipo_lower: str) -> dict | None:
+    """La entrada del ATOM del Catastro para el municipio del límite.
+
+    El Catastro numera los municipios a su manera: casi siempre coincide con el INE, pero no en las
+    grandes ciudades (Madrid es 28900 en el Catastro y 28079 en el INE). Antes se buscaba el INE en
+    el ATOM y Madrid se quedaba sin catastro; y un INE que coincidiera con el código catastral de
+    otro municipio habría bajado ese otro. Ahora se pregunta al Catastro en un punto interior del
+    municipio y se elige la entrada que lo contiene, por código y por nombre.
+    """
+    punto = unary_union(boundary_utm.to_crs("EPSG:4326").geometry).representative_point()
+    lon, lat = punto.x, punto.y
+    ine = _ref_ine(boundary_utm)[:5]
+    nombre = str(boundary_utm["nombre"].iloc[0]) if "nombre" in boundary_utm.columns else ""
+    cat = _catastro_en_punto(lon, lat)
+    if cat and not ine:
+        ine = cat["ine"]                         # OSM sin ref:ine: el Catastro dice cuál es
+    if not ine:
         return None
-    except Exception as e:
-        print(f"[catastro_atom] {e}")
-        return None
+    entradas = _atom_entradas(tipo_cap, tipo_lower, ine[:2])
+    dentro = [e for e in entradas if e["bbox"] is None or
+              (e["bbox"][0] <= lon <= e["bbox"][2] and e["bbox"][1] <= lat <= e["bbox"][3])]
+    nombres = {_norm(nombre)} if nombre and nombre != "nan" else set()
+    if cat and cat["ldt"]:
+        # la dirección acaba en «<MUNICIPIO> (<PROVINCIA>)»
+        nombres.add(_norm(cat["ldt"].rsplit("(", 1)[0]))
+    nombres.discard("")
+
+    def casa(e):
+        n = _norm(e["name"])
+        return any(x == n or x.endswith(" " + n) for x in nombres)
+
+    for cand in (dentro, entradas):
+        hit = next((e for e in cand if e["code"] == ine and (casa(e) or e in dentro)), None) \
+            or next((e for e in sorted(cand, key=lambda e: -len(e["name"])) if casa(e)), None)
+        if hit:
+            return {**hit, "ine": ine}
+    if len(dentro) == 1:
+        return {**dentro[0], "ine": ine}
+    print(f"[catastro_atom] no encuentro el municipio {ine} {nombre!r} en el ATOM de {ine[:2]}")
+    return None
 
 
 def _catastro_inspire_bulk(
-    ref_ine: str,
     tipo_cap: str,   # "Buildings" o "CadastralParcels"
     tipo_code: str,  # "BU" o "CP"
     boundary_utm: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame | None:
     """Descarga y parsea el GML del Catastro INSPIRE para un municipio."""
-    if not ref_ine or len(ref_ine) < 5:
+    tipo_lower = tipo_code.lower()
+    try:
+        muni = _municipio_catastro(boundary_utm, tipo_cap, tipo_lower)
+    except Exception as e:
+        print(f"[catastro_atom] {e}")
+        return None
+    if not muni:
+        return None
+    if muni["code"][:2] in ("01", "20", "31", "48"):
         return None
 
-    muni_code = ref_ine[:5].zfill(5)
-    tipo_lower = tipo_code.lower()
-
-    cache_key = f"catastro_{tipo_code}_{muni_code}.gml"
+    # la caché va por el código del Catastro (el de la URL), no por el INE
+    cache_key = f"catastro_{tipo_code}_{muni['code']}.gml"
     cache_file = _CACHE_DIR / cache_key
 
     if not cache_file.exists():
-        # Obtener la URL real desde el ATOM feed
-        url = _catastro_atom_url(ref_ine, tipo_cap, tipo_lower)
-        if not url:
-            return None
+        url = muni["url"]
 
         print(f"[catastro_bulk] descargando {url}")
         try:
@@ -348,8 +424,8 @@ def _catastro_inspire_bulk(
 def _sin_catastro(ref: str, que: str) -> str:
     """Motivo legible de que el Catastro no haya dado nada (antes salía «0 encontrados»)."""
     if not ref:
-        return (f"OSM no tiene el código INE de este municipio y el Catastro lo necesita para "
-                f"descargar {que}. Prueba con fuente Auto u OSM.")
+        return (f"No se ha podido identificar el municipio en el Catastro (OSM no trae su código INE y el "
+                f"Catastro no ha respondido) para descargar {que}. Prueba con fuente Auto u OSM.")
     if ref[:2] in ("01", "20", "31", "48"):
         return (f"Este municipio está en territorio foral (País Vasco o Navarra), que tiene su propio "
                 f"catastro: no hay {que} en el Catastro estatal. Prueba con fuente OSM.")
@@ -369,15 +445,13 @@ def descargar_edificios(
     ref = _ref_ine(boundary_utm)
 
     if fuente in ("catastro", "auto"):
-        if ref:
-            gdf = _catastro_inspire_bulk(ref, "buildings", "BU", boundary_utm)
-            if gdf is not None and len(gdf) > 0:
-                print(f"[edificios] {len(gdf)} edificios del Catastro INSPIRE")
-                gdf.attrs["fuente_real"] = "catastro"
-                return gdf
-            print("[edificios] Catastro bulk falló" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
-        else:
-            print("[edificios] ref:ine no disponible en OSM" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
+        # también sin ref:ine en OSM: el municipio se pregunta al propio Catastro
+        gdf = _catastro_inspire_bulk("buildings", "BU", boundary_utm)
+        if gdf is not None and len(gdf) > 0:
+            print(f"[edificios] {len(gdf)} edificios del Catastro INSPIRE")
+            gdf.attrs["fuente_real"] = "catastro"
+            return gdf
+        print("[edificios] Catastro bulk falló" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
         if fuente == "catastro":
             raise ValueError(_sin_catastro(ref, "edificios"))
         print("[edificios] usando OSM como fallback")
@@ -480,15 +554,13 @@ def descargar_parcelas(
     ref = _ref_ine(boundary_utm)
 
     if fuente in ("catastro", "auto"):
-        if ref:
-            gdf = _catastro_inspire_bulk(ref, "CadastralParcels", "CP", boundary_utm)
-            if gdf is not None and len(gdf) > 0:
-                print(f"[parcelas] {len(gdf)} parcelas del Catastro INSPIRE")
-                gdf.attrs["fuente_real"] = "catastro"
-                return gdf
-            print("[parcelas] Catastro bulk falló" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
-        else:
-            print("[parcelas] ref:ine no disponible en OSM" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
+        # también sin ref:ine en OSM: el municipio se pregunta al propio Catastro
+        gdf = _catastro_inspire_bulk("CadastralParcels", "CP", boundary_utm)
+        if gdf is not None and len(gdf) > 0:
+            print(f"[parcelas] {len(gdf)} parcelas del Catastro INSPIRE")
+            gdf.attrs["fuente_real"] = "catastro"
+            return gdf
+        print("[parcelas] Catastro bulk falló" + ("" if fuente == "auto" else " — prueba con fuente=auto u osm"))
         if fuente == "catastro":
             raise ValueError(_sin_catastro(ref, "parcelas"))
         print("[parcelas] usando OSM landuse como fallback")

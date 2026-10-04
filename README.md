@@ -11,7 +11,7 @@ Descarga geometría vectorial (edificios, manzanas, parcelas) de cualquier munic
 ```
 caron-inventario/
 ├── app/
-│   ├── downloader.py   — descarga OSM + Catastro WFS INSPIRE
+│   ├── downloader.py   — descarga OSM + Catastro INSPIRE (descarga masiva por municipio)
 │   ├── caron.py        — algoritmo de clasificación y disposición
 │   ├── exporter.py     — exportadores DXF / SVG / PDF
 │   └── main.py         — API FastAPI
@@ -68,9 +68,9 @@ python -m app.cli --municipio "Moraleja de Enmedio" --elemento edificios --outpu
 
 ## Fuentes de datos
 
-- **Edificios**: Catastro BU WFS INSPIRE (fallback: OpenStreetMap Overpass)
+- **Edificios**: Catastro BU INSPIRE, descarga masiva por municipio (fallback: OpenStreetMap Overpass)
 - **Manzanas**: Poligonización de la red viaria de OSM
-- **Parcelas**: Catastro CP WFS INSPIRE (fallback: landuse de OSM)
+- **Parcelas**: Catastro CP INSPIRE, descarga masiva por municipio (fallback: landuse de OSM)
 - **Límites municipales**: OpenStreetMap (Nominatim + Overpass)
 
 ## Créditos
