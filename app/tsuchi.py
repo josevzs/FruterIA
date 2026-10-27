@@ -22,6 +22,9 @@ import requests
 from shapely.geometry import box
 
 CONTRACT = 1
+# Versiones de «tsuchi import» que se admiten (docs/contratos.md de tsuchiCore): solo la 1, un
+# activo. El hub mira `contracts` en /info antes de mandar; otra versión se rechaza diciéndolo.
+CONTRACTS = (1,)
 IMPORT_KEY = os.environ.get("TSUCHI_IMPORT_KEY", "")
 # Hosts de los que se aceptan ficheros: el servicio tsuchi-data de la red Docker
 # compartida. Evita que la importación sirva para pedir URLs arbitrarias.
@@ -41,8 +44,13 @@ class TsuchiImportError(ValueError):
     """Petición de importación que no se puede aceptar (mensaje apto para el usuario)."""
 
 
+def productor() -> dict:
+    return {"system": "fruteria", "version": os.environ.get("FRUTERIA_VERSION", "") or "1.0.0"}
+
+
 def info() -> dict:
-    return {"accepts": ["vector"], "datasets": sorted(ELEMENTOS), "contract": CONTRACT, "version": "1.0.0"}
+    return {"accepts": ["vector"], "datasets": sorted(ELEMENTOS), "contracts": list(CONTRACTS),
+            "contract": max(CONTRACTS), "producer": productor(), "version": "1.0.0"}
 
 
 def check_key(key: str | None) -> bool:
@@ -51,8 +59,11 @@ def check_key(key: str | None) -> bool:
 
 def load(body: dict) -> dict:
     """Valida la petición, baja el GeoPackage y devuelve lo que necesita el trabajo."""
-    if body.get("tsuchi") != CONTRACT:
-        raise TsuchiImportError(f"contrato tsuchi {body.get('tsuchi')!r} no soportado (este es v{CONTRACT})")
+    if body.get("tsuchi") not in CONTRACTS:
+        p = body.get("producer") if isinstance(body.get("producer"), dict) else {}
+        de = " ".join(str(v) for v in (p.get("system"), p.get("version")) if v)
+        raise TsuchiImportError(f"contrato tsuchi import v{body.get('tsuchi')}" + (f" (de {de})" if de else "")
+                                + " no admitido en FruterIA: se admite " + ", ".join(f"v{v}" for v in CONTRACTS))
     asset = body.get("asset") or {}
     key = f"{asset.get('provider')}/{asset.get('dataset')}"
     elemento = (body.get("options") or {}).get("elemento") or ELEMENTOS.get(key)

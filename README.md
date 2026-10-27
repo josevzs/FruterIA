@@ -52,7 +52,9 @@ aquí, y FruterIA se abre con el trabajo cargado; solo queda ajustar el layout y
 - `GET /api/tsuchi/info` y `POST /api/tsuchi/import` ([app/tsuchi.py](app/tsuchi.py)): baja el
   GeoPackage de `TSUCHI_DATA_HOSTS` (por defecto `tsuchi-data`), lo pasa a EPSG:25830 y deja
   el trabajo preparado; devuelve `/?job=<id>`. Con `TSUCHI_IMPORT_KEY`, el hub debe enviarla
-  en `X-Tsuchi-Key`.
+  en `X-Tsuchi-Key`. Admite «tsuchi import» v1: lo anuncia en `contracts` y rechaza otra versión
+  con un 422 que lo dice (reglas en tsuchiCore `docs/contratos.md`; test en
+  `tests/test_tsuchi_contrato.py`).
 - `POST /api/jobs/<id>/run` recalcula el inventario con otro layout sobre los datos que el
   trabajo ya tiene, sin volver a descargar.
 - El contenedor tiene que unirse a la red Docker `tsuchi` del hub: ver el comentario de
