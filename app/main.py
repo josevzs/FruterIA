@@ -267,12 +267,14 @@ def status(job_id: str):
             "label": job.get("label", ""),
             "n_input": int(len(gdf)),
             "map_bounds": [[round(b[1], 5), round(b[0], 5)], [round(b[3], 5), round(b[2], 5)]],
+            "tsuchi_ref": job.get("tsuchi_ref"),
         }
 
     if job["status"] != "done":
         return {
             "status": job["status"],
             "error": job.get("error"),
+            "tsuchi_ref": job.get("tsuchi_ref"),
         }
 
     # la respuesta de un job terminado no cambia hasta que se recalcula: se guarda
@@ -304,6 +306,8 @@ def status(job_id: str):
         "status": "done",
         "elemento": job["elemento"],
         "fuente_real": job.get("fuente_real", "desconocida"),
+        # de qué ventana y territorio de tsuchi sale (None si no viene de una ventana)
+        "tsuchi_ref": job.get("tsuchi_ref"),
         "n": result.n,
         "total_area": result.total_area,
         "mean_area": result.mean_area,

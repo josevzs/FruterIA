@@ -529,6 +529,7 @@ main {
     <input type="hidden" id="osm-type">
     <input type="hidden" id="osm-id">
     <div id="muni-info" style="font-size:10px;color:var(--g40);min-height:12px;font-weight:500"></div>
+    <div id="tsuchi-ref" style="font-size:10px;color:var(--g40);font-weight:500;display:none"></div>
   </div>
 
   <!-- ELEMENTO -->
@@ -834,6 +835,7 @@ function renderDD(items) {
       $('muni-info').textContent = el.querySelector('.d-item-sub').textContent;
       dd.style.display='none';
       S.tsuchi = false;   // elegir municipio sustituye a los datos de tsuchi
+      showTsuchiRef(null);
       showPlace(items[+el.dataset.i]);
     });
   });
@@ -1310,6 +1312,17 @@ $('btn-map-svg').addEventListener('click', () => doMapExport('map-svg','svg', fa
 $('btn-map-dxf').addEventListener('click', () => doMapExport('map-dxf','dxf', false));
 
 // ═══ TSUCHI ═══════════════════════════════════════════════════════════════
+// De qué ventana y territorio de tsuchi sale el trabajo («El Pardo › Vaso»), con los
+// nombres de cuando llegó: la jerarquía es de tsuchi y aquí solo se enseña.
+function showTsuchiRef(ref) {
+  const el = $('tsuchi-ref');
+  const v = ref && ref.ventana;
+  const partes = v ? [ref.territorio && ref.territorio.nombre, v.name || v.slug || v.id].filter(Boolean) : [];
+  el.textContent = partes.length ? 'de tsuchi: ' + partes.join(' › ') : '';
+  el.title = v ? `ventana ${v.id}` + (ref.visto ? ` · nombres de ${ref.visto.slice(0,10)}` : '') : '';
+  el.style.display = partes.length ? 'block' : 'none';
+}
+
 // ?job=<id>: un job que tsuchi ha dejado preparado con sus datos. Se lee una vez
 // y se quita de la URL, para que recargar no lo vuelva a imponer.
 (async () => {
@@ -1328,6 +1341,7 @@ $('btn-map-dxf').addEventListener('click', () => doMapExport('map-dxf','dxf', fa
     const radio = document.querySelector(`input[name="el"][value="${d.elemento}"]`);
     if (radio) radio.checked = true;
     $('search').value = S.muni;
+    showTsuchiRef(d.tsuchi_ref);
     if (d.status === 'staged') {
       S.tsuchi = true;
       $('muni-info').textContent = `datos de tsuchi · ${d.n_input.toLocaleString('es')} ${d.elemento} · ${d.fuente_real.replace('tsuchi:','')}`;

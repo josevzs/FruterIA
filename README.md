@@ -55,6 +55,12 @@ aquí, y FruterIA se abre con el trabajo cargado; solo queda ajustar el layout y
   en `X-Tsuchi-Key`. Admite «tsuchi import» v1: lo anuncia en `contracts` y rechaza otra versión
   con un 422 que lo dice (reglas en tsuchiCore `docs/contratos.md`; test en
   `tests/test_tsuchi_contrato.py`).
+- Si el activo se abre desde una ventana de tsuchi, llegan además `site` y `territorio`
+  (opcionales) y el trabajo guarda de dónde sale: `tsuchi_ref` = {`ventana` {id, slug, name},
+  `territorio` {id, slug, nombre}, `visto`}, que `GET /api/status/<id>` devuelve y la UI enseña
+  («de tsuchi: El Pardo › Vaso», con los nombres de cuando llegó). Solo informa; sin ventana,
+  todo igual («referencia de territorio» en tsuchiCore `docs/traspaso.md`; test en
+  `tests/test_tsuchi_referencia.py`).
 - `POST /api/jobs/<id>/run` recalcula el inventario con otro layout sobre los datos que el
   trabajo ya tiene, sin volver a descargar.
 - El contenedor tiene que unirse a la red Docker `tsuchi` del hub: ver el comentario de

@@ -11,10 +11,14 @@ layout y pulsa Generar.
 
 Sin tsuchi, FruterIA sigue igual: estas rutas solo se usan si alguien las llama.
 Con TSUCHI_IMPORT_KEY definida, el hub tiene que mandarla en X-Tsuchi-Key.
+
+Si el activo se abre desde una ventana de tsuchi, llegan además `site` y `territorio`
+(campos opcionales de v1): el trabajo guarda de dónde sale (`tsuchi_ref`, ver `referencia`).
 """
 
 import io
 import os
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import geopandas as gpd
@@ -100,6 +104,23 @@ def load(body: dict) -> dict:
         "fuente_real": f"tsuchi:{key}",
         "label": asset.get("title") or key,
         "tsuchi_asset": asset.get("id"),
+        "tsuchi_ref": referencia(body),
+    }
+
+
+def referencia(body: dict) -> dict | None:
+    """De qué ventana y territorio de tsuchi sale el trabajo («referencia de territorio», tsuchiCore
+    docs/traspaso.md). Lo que manda es el id de la ventana; los nombres son un recuerdo de cuándo
+    llegó (`visto`), y la jerarquía se edita en tsuchi, no aquí. Solo informa: sin `site` (un activo
+    abierto suelto) no hay referencia, y un `site` o `territorio` mal formado se ignora, no se rechaza."""
+    site = body.get("site")
+    if not isinstance(site, dict) or not site.get("id"):
+        return None
+    t = body.get("territorio")
+    return {
+        "ventana": {k: site.get(k) for k in ("id", "slug", "name")},
+        "territorio": {k: t.get(k) for k in ("id", "slug", "nombre")} if isinstance(t, dict) and t.get("id") else None,
+        "visto": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
 
